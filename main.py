@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import asyncio
 from asyncio import Queue, Semaphore
 from datetime import datetime
+from typing import Awaitable, Callable, Generic, List, TypeVar
 
 from aiohttp import ClientSession
 from pydantic import BaseModel
@@ -42,15 +45,48 @@ async def fetch_repo_data(
                 return False
 
 
-async def consumer(queue: Queue):
-    while True:
-        repo_data = await queue.get()
-        if repo_data is None:
-            print("Consumer shutting down...")
-            break
+T = TypeVar("T")
+Consumer = Callable[[T], Awaitable[None]]
 
-        print(repo_data)
-        queue.task_done()
+
+class ConsumerManager(Generic[T]):
+
+    def __init__(self, queue: Queue):
+        self.queue = queue
+        self.task = asyncio.create_task(self._consume())
+        self._consumers: List[Consumer] = []
+
+    def add_consumer(self, consumer_func: Consumer) -> ConsumerManager:
+        self._consumers.append(consumer_func)
+        return self
+
+    async def _consume(self) -> None:
+        try:
+            while True:
+                item = await self.queue.get()
+                if item is None:
+                    print("Consumer shutting down...")
+                    break
+
+                await asyncio.gather(
+                    *(consumer(item) for consumer in self._consumers),
+                    return_exceptions=True,
+                )
+
+                self.queue.task_done()
+        except asyncio.CancelledError:
+            print("Consumer task was cancelled.")
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.queue.put(None)
+        await self.task
+
+
+async def my_method(repo_data: RepoData) -> None:
+    print(f"Processing {repo_data}")
 
 
 async def main():
@@ -62,16 +98,15 @@ async def main():
     print("Analyzing repositories...")
     semaphore = Semaphore(5)
     queue = Queue()
-    consumer_task = asyncio.create_task(consumer(queue))
-    async with ClientSession() as session:
-        tasks = (fetch_repo_data(session, semaphore, queue, repo) for repo in repos)
-        for result in asyncio.as_completed(tasks):
-            was_enqueued = await result
-            print(was_enqueued)
+    consumer = ConsumerManager[RepoData](queue).add_consumer(my_method)
+    async with consumer:
+        async with ClientSession() as session:
+            tasks = (fetch_repo_data(session, semaphore, queue, repo) for repo in repos)
+            for result in asyncio.as_completed(tasks):
+                was_enqueued = await result
+                print(was_enqueued)
 
-    await queue.join()
-    await queue.put(None)
-    await consumer_task
+        await queue.join()
 
 
 asyncio.run(main())
