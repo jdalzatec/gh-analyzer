@@ -18,6 +18,7 @@ async def main():
         "tiangolo/fastapi",
         "pallets/flask",
         "django/django",
+        "jdalzatec/vegas",
     ]
     print("Analyzing repositories...")
     semaphore = Semaphore(5)
@@ -35,7 +36,3 @@ async def main():
                 print(was_enqueued)
 
         await queue.join()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
