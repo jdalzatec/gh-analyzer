@@ -1,8 +1,10 @@
 import asyncio
-from asyncio import Semaphore, Queue
-from aiohttp import ClientSession
+from asyncio import Queue, Semaphore
 from datetime import datetime
+
+from aiohttp import ClientSession
 from pydantic import BaseModel
+
 
 class RepoData(BaseModel):
     full_name: str
@@ -10,13 +12,16 @@ class RepoData(BaseModel):
     forks_count: int
     updated_at: datetime
 
-async def fetch_repo_data(session: ClientSession, semaphore: Semaphore, queue: Queue, repo_name: str) -> RepoData:
+
+async def fetch_repo_data(
+    session: ClientSession, semaphore: Semaphore, queue: Queue, repo_name: str
+) -> bool:
     async with semaphore:
         print(f"Fetching data for {repo_name}...")
         url = f"https://api.github.com/repos/{repo_name}"
         headers = {
             "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28"
+            "X-GitHub-Api-Version": "2022-11-28",
         }
         if repo_name == "tiangolo/fastapi":
             await asyncio.sleep(10)
@@ -28,13 +33,24 @@ async def fetch_repo_data(session: ClientSession, semaphore: Semaphore, queue: Q
                     full_name=data["full_name"],
                     stargazers_count=data["stargazers_count"],
                     forks_count=data["forks_count"],
-                    updated_at=data["updated_at"]
+                    updated_at=data["updated_at"],
                 )
                 await queue.put(repo_data)
+                return True
             else:
                 print(f"Failed to fetch data for {repo_name}: {response.status}")
-                return None
+                return False
 
+
+async def consumer(queue: Queue):
+    while True:
+        repo_data = await queue.get()
+        if repo_data is None:
+            print("Consumer shutting down...")
+            break
+
+        print(repo_data)
+        queue.task_done()
 
 
 async def main():
@@ -43,13 +59,19 @@ async def main():
         "django/django",
         "pallets/flask",
     ]
-    print('Analyzing repositories...')
-    semaphore = Semaphore(1)
+    print("Analyzing repositories...")
+    semaphore = Semaphore(5)
     queue = Queue()
+    consumer_task = asyncio.create_task(consumer(queue))
     async with ClientSession() as session:
         tasks = (fetch_repo_data(session, semaphore, queue, repo) for repo in repos)
         for result in asyncio.as_completed(tasks):
-            repo_data = await result
-            print(queue.qsize())
+            was_enqueued = await result
+            print(was_enqueued)
+
+    await queue.join()
+    await queue.put(None)
+    await consumer_task
+
 
 asyncio.run(main())
