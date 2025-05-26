@@ -94,12 +94,13 @@ async def average_processor(
     avg = avg_star_tracker.send(repo_data.stargazers_count)
     print(f"Average stars: {avg}")
 
-async def recently_updated_processor(
-    repo_data: RepoData
-) -> None:
+
+async def recently_updated_processor(repo_data: RepoData) -> None:
     if (datetime.now(tz=UTC) - repo_data.updated_at).total_seconds() < 86400:
-        print(f"Recently updated repository: {repo_data.full_name} - {repo_data.updated_at}")
-    
+        print(
+            f"Recently updated repository: {repo_data.full_name} - {repo_data.updated_at}"
+        )
+
 
 def compute_star_avg() -> Generator[float, int, None]:
     total = 0
@@ -124,9 +125,11 @@ async def main():
     queue = Queue()
     avg_star_tracker = compute_star_avg()
     next(avg_star_tracker)
-    consumer = ConsumerManager[RepoData](queue).add_consumer(
-        lambda rd: average_processor(avg_star_tracker, rd)
-    ).add_consumer(recently_updated_processor)
+    consumer = (
+        ConsumerManager[RepoData](queue)
+        .add_consumer(lambda rd: average_processor(avg_star_tracker, rd))
+        .add_consumer(recently_updated_processor)
+    )
     async with consumer:
         async with ClientSession() as session:
             tasks = (fetch_repo_data(session, semaphore, queue, repo) for repo in repos)
