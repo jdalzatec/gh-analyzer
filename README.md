@@ -21,12 +21,12 @@ app/
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone git@github.com:jdalzatec/gh-analyzer.git
 cd gh-analyzer
 
 # Install dependencies
 pip install -r requirements.txt
-
+```
 
 ## Usage
 
