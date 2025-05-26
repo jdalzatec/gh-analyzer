@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from asyncio import Queue, Semaphore
-from datetime import datetime
-from typing import Awaitable, Callable, Generic, List, TypeVar
+from datetime import UTC, datetime
+from typing import Awaitable, Callable, Generator, Generic, List, TypeVar
 
 from aiohttp import ClientSession
 from pydantic import BaseModel
@@ -27,7 +27,7 @@ async def fetch_repo_data(
             "X-GitHub-Api-Version": "2022-11-28",
         }
         if repo_name == "tiangolo/fastapi":
-            await asyncio.sleep(10)
+            await asyncio.sleep(1)
 
         async with session.get(url, headers=headers) as response:
             if response.status == 200:
@@ -68,10 +68,13 @@ class ConsumerManager(Generic[T]):
                     print("Consumer shutting down...")
                     break
 
-                await asyncio.gather(
+                results = await asyncio.gather(
                     *(consumer(item) for consumer in self._consumers),
                     return_exceptions=True,
                 )
+                for result in results:
+                    if isinstance(result, Exception):
+                        print(f"Consumer raised an exception: {result}")
 
                 self.queue.task_done()
         except asyncio.CancelledError:
@@ -85,20 +88,45 @@ class ConsumerManager(Generic[T]):
         await self.task
 
 
-async def my_method(repo_data: RepoData) -> None:
-    print(f"Processing {repo_data}")
+async def average_processor(
+    avg_star_tracker: Generator[float, int, None], repo_data: RepoData
+) -> None:
+    avg = avg_star_tracker.send(repo_data.stargazers_count)
+    print(f"Average stars: {avg}")
+
+async def recently_updated_processor(
+    repo_data: RepoData
+) -> None:
+    if (datetime.now(tz=UTC) - repo_data.updated_at).total_seconds() < 86400:
+        print(f"Recently updated repository: {repo_data.full_name} - {repo_data.updated_at}")
+    
+
+def compute_star_avg() -> Generator[float, int, None]:
+    total = 0
+    count = 0
+    avg = 0.0
+    while True:
+        print("Computing average stars...")
+        value = yield avg
+        total += value
+        count += 1
+        avg = total / count
 
 
 async def main():
     repos = [
         "tiangolo/fastapi",
-        "django/django",
         "pallets/flask",
+        "django/django",
     ]
     print("Analyzing repositories...")
     semaphore = Semaphore(5)
     queue = Queue()
-    consumer = ConsumerManager[RepoData](queue).add_consumer(my_method)
+    avg_star_tracker = compute_star_avg()
+    next(avg_star_tracker)
+    consumer = ConsumerManager[RepoData](queue).add_consumer(
+        lambda rd: average_processor(avg_star_tracker, rd)
+    ).add_consumer(recently_updated_processor)
     async with consumer:
         async with ClientSession() as session:
             tasks = (fetch_repo_data(session, semaphore, queue, repo) for repo in repos)
